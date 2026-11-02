@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gppcc — Gamepad PC Controller</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">◉</span>
+      <div>
+        <div class="title">gppcc</div>
+        <div class="subtitle">gamepad pc controller</div>
+      </div>
+    </div>
+    <div class="header-controls">
+      <label class="field inline">
+        <span>Profile</span>
+        <select id="profileSelect"></select>
+      </label>
+      <div id="devicePill" class="pill">No gamepad</div>
+      <label class="switch" title="Enable / pause gamepad control">
+        <input type="checkbox" id="enabledToggle" checked>
+        <span class="slider"></span>
+        <span class="switch-label" id="enabledLabel">Active</span>
+      </label>
+      <span id="saveStatus" class="save-status"></span>
+    </div>
+  </header>
+
+  <div id="permBanner" class="banner hidden">
+    <strong>macOS permission needed.</strong>
+    Allow <em>gppcc</em> (or the terminal you started it from) under <em>System Settings → Privacy &amp; Security → Accessibility</em>,
+    then restart gppcc. Until then the cursor and keys won't move.
+    <button id="permButton" class="btn small">Open prompt</button>
+  </div>
+
+  <nav id="tabs">
+    <button data-tab="live" class="active">Live</button>
+    <button data-tab="controller">Controller</button>
+    <button data-tab="cursor">Cursor &amp; Scroll</button>
+    <button data-tab="bindings">Bindings</button>
+    <button data-tab="macros">Macros</button>
+    <button data-tab="profiles">Profiles</button>
+  </nav>
+
+  <main id="view"></main>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

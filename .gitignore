@@ -1,0 +1,34 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build output (PyInstaller)
+build/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Logs and local app data (profiles live in ~/.gppcc, or GPPCC_HOME if set inside the repo)
+*.log
+.gppcc/
+
+# Secrets: env files and code-signing material
+.env
+.env.*
+*.p12
+*.pfx
+*.cer
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
