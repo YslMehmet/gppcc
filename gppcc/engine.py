@@ -15,7 +15,8 @@ from .output import Output
 TICK_HZ = 125
 
 # Actions that are "instant": holding/toggling them just fires once on start.
-_INSTANT = {"scroll", "move", "text", "toggle_enabled", "profile", "next_profile", "none"}
+_INSTANT = {"scroll", "move", "text", "toggle_enabled", "profile", "next_profile",
+            "keyboard", "none"}
 
 
 class Engine:
@@ -38,6 +39,10 @@ class Engine:
         self.remaps: dict = config.load_remaps()
         self._raw_pressed: set[str] = set()
         self._last_raw: dict = {"name": None, "t": 0.0}
+        self.overlay = None                 # created lazily on first keyboard action
+        self._overlay_opener: str | None = None
+        self._overlay_cfg: dict | None = None
+        self._shift_on = False
         self._reset_runtime()
 
     # ------------------------------------------------------------------ state
@@ -55,6 +60,9 @@ class Engine:
             run.stop()
         self._reset_runtime()
         self.out.release_all()
+        if self.overlay is not None:
+            self.overlay.close()
+            self._overlay_opener = None
 
     def _load(self, name: str) -> None:
         self.profile = config.load_profile(name)
@@ -128,6 +136,7 @@ class Engine:
                 "precision": self._precision_on(),
                 "macros_running": sorted({r.macro_name for r in self._macros.values() if r.is_alive()}),
                 "toggled": sorted(self._toggled),
+                "overlay": self._overlay_active(),
                 "log": list(self.log)[-15:],
                 "now": time.time(),
             }
@@ -152,6 +161,8 @@ class Engine:
         finally:
             with self.lock:
                 self._stop_all()
+            if self.overlay is not None:
+                self.overlay.shutdown()
             self.pads.close()
 
     def _pressed_inputs(self, st: PadState) -> set[str]:
@@ -188,6 +199,12 @@ class Engine:
         self._prev_pressed = pressed
         now = time.monotonic()
 
+        # While the keyboard overlay is open it captures the pad: no cursor,
+        # scroll, or ordinary bindings fire — only its own navigation does.
+        if self._overlay_active():
+            self._drive_overlay(st, pressed, prev)
+            return
+
         for name in sorted(pressed - prev):
             self._last_input = {"name": name, "t": time.time()}
             self._on_press(name, pressed)
@@ -200,6 +217,9 @@ class Engine:
             if not run.is_alive():
                 del self._macros[bid]
                 self._toggled.discard(bid)
+
+        if self._overlay_active():   # a binding just opened it this tick
+            return
 
         if self.enabled:
             self._move_cursor(st, dt)
@@ -301,6 +321,8 @@ class Engine:
             if names:
                 i = names.index(self.active_name) if self.active_name in names else -1
                 self._switch_from_binding(names[(i + 1) % len(names)])
+        elif t == "keyboard":
+            self._open_overlay(b.get("input") or None)
 
     def _start(self, b: dict) -> None:
         """Begin a continuous action (hold / toggle-on)."""
@@ -358,6 +380,69 @@ class Engine:
             self._note(f"unknown profile: {name!r}")
             return
         self.switch_profile(name)
+
+    # --------------------------------------------------- keyboard overlay
+    def _ensure_overlay(self):
+        if self.overlay is None:
+            from . import overlay as overlay_mod
+
+            self._overlay_cfg = config.load_overlay()
+            self.overlay = overlay_mod.create(self._overlay_cfg)
+            if self.overlay is not None:
+                self.overlay.on_type = self.out.tap
+        return self.overlay
+
+    def overlay_saved(self, cfg: dict) -> None:
+        """Called after the UI saves the overlay config; apply it live if open."""
+        with self.lock:
+            self._overlay_cfg = cfg
+            if self.overlay is not None:
+                self.overlay.set_config(cfg)
+
+    def _open_overlay(self, opener: str | None) -> None:
+        ov = self._ensure_overlay()
+        if ov is None:
+            self._note("keyboard overlay is Windows-only for now")
+            return
+        if ov.is_open():
+            return
+        self._stop_all()          # release anything held before we start typing
+        self._overlay_opener = opener
+        self._shift_on = False
+        ov.set_shift(False)
+        ov.open()
+        self._note("keyboard overlay opened")
+
+    def _overlay_active(self) -> bool:
+        return self.overlay is not None and self.overlay.is_open()
+
+    def _drive_overlay(self, st: PadState, pressed: set[str], prev: set[str]) -> None:
+        ov = self.overlay
+        ov.aim(st.lx, st.ly, st.rx, st.ry)
+
+        def edge(name: str) -> bool:
+            return name in pressed and name not in prev
+
+        # Shift: a configurable button, either toggle (caps-lock) or hold.
+        shift = (self._overlay_cfg or {}).get("shift") or {"input": "X", "mode": "toggle"}
+        si, mode = shift["input"], shift["mode"]
+        if mode == "hold":
+            on = si in pressed
+            if on != self._shift_on:
+                self._shift_on = on
+                ov.set_shift(on)
+        elif edge(si):
+            self._shift_on = not self._shift_on
+            ov.set_shift(self._shift_on)
+
+        if edge("A"):
+            ov.commit()
+        # Several ways out, so a mislabelled face button (common on Nintendo-style
+        # pads) can never trap the user: B, Start, or re-pressing the opener.
+        if edge("B") or edge("Start") or (self._overlay_opener and edge(self._overlay_opener)):
+            ov.close()
+            self._overlay_opener = None
+            self._note("keyboard overlay closed")
 
     # -------------------------------------------------------------- motion
     def _precision_on(self) -> bool:

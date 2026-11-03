@@ -138,6 +138,11 @@ def make_handler(engine: Engine, port: int):
                     "platform": "mac" if output.IS_MAC else "windows" if output.IS_WIN else "other",
                     "defaults": config.DEFAULT_PROFILE,
                     "remap_targets": config.REMAP_TARGETS,
+                    "overlay_defaults": config.DEFAULT_OVERLAY,
+                    "overlay_supported": output.IS_WIN,
+                    "theme_keys": config.THEME_KEYS,
+                    "sound_styles": config.SOUND_STYLES,
+                    "shift_modes": config.SHIFT_MODES,
                 }
 
             if route == ("POST", "enabled"):
@@ -169,6 +174,14 @@ def make_handler(engine: Engine, port: int):
                 if not device:
                     raise ApiError(400, "no device")
                 return 200, {"device": device, "map": engine.set_remap(device, b.get("map") or {})}
+
+            if route == ("GET", "overlay"):
+                return 200, config.load_overlay()
+
+            if route == ("PUT", "overlay"):
+                saved = config.save_overlay(self._body())
+                engine.overlay_saved(saved)
+                return 200, saved
 
             if route == ("GET", "profiles"):
                 return 200, {"active": engine.active_name, "names": config.list_profiles()}

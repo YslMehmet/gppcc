@@ -64,6 +64,9 @@ const S = {
   selectedMacro: null,
   remaps: {},             // device name -> { raw: target }
   capture: null,          // { since, onCapture, el }
+  overlay: null,          // keyboard overlay config (global, not per-profile)
+  okWheel: 0,             // selected wheel index in the keyboard editor
+  okKey: 0,               // selected key index within that wheel
 };
 
 const INPUT_LABELS = {
@@ -94,6 +97,7 @@ const ACTION_LABELS = {
   toggle_enabled: "Pause / resume gppcc",
   profile: "Switch to profile",
   next_profile: "Next profile",
+  keyboard: "On-screen keyboard (overlay)",
 };
 
 const OP_LABELS = {
@@ -226,7 +230,7 @@ function render() {
   v.replaceChildren();
   if (!S.profile || !S.meta) return;
   ({ live: renderLive, controller: renderController, cursor: renderCursor, bindings: renderBindings,
-    macros: renderMacros, profiles: renderProfiles })[S.tab]();
+    macros: renderMacros, keyboard: renderKeyboard, profiles: renderProfiles })[S.tab]();
 }
 
 // ---- Live ---------------------------------------------------------------
@@ -829,13 +833,249 @@ function renderProfiles() {
     items, fileInput));
 }
 
+// ---- Keyboard overlay ---------------------------------------------------
+let okSaveTimer = null;
+async function saveOverlay() {
+  clearTimeout(okSaveTimer);
+  okSaveTimer = null;
+  setSaveStatus("Saving…");
+  try {
+    S.overlay = await api("PUT", "overlay", S.overlay);
+    setSaveStatus("Saved ✓");
+  } catch (e) {
+    setSaveStatus("Save failed");
+    toast("Save failed: " + e.message, true);
+  }
+}
+
+function okChanged(rerender = false) {
+  setSaveStatus("Unsaved…");
+  clearTimeout(okSaveTimer);
+  okSaveTimer = setTimeout(saveOverlay, 350);
+  if (rerender) renderKeyboard_refresh();
+}
+
+function renderKeyboard_refresh() {
+  if (S.tab !== "keyboard") return;
+  const y = window.scrollY;
+  render();
+  window.scrollTo(0, y);
+}
+
+// A labelled colour swatch bound to theme[key].
+function okColor(label, obj, key) {
+  return h("label", { class: "ok-color" },
+    h("input", { type: "color", value: obj[key],
+      oninput: (e) => { obj[key] = e.target.value; okChanged(); liveDonut(); } }),
+    h("span", {}, label));
+}
+
+function okRange(label, obj, key, min, max, step, fmt) {
+  const out = h("span", { class: "ok-rangeval" }, fmt ? fmt(obj[key]) : obj[key]);
+  return h("div", { class: "field" }, h("span", {}, label),
+    h("div", { class: "range-row" },
+      h("input", { type: "range", min, max, step, value: obj[key],
+        oninput: (e) => { obj[key] = Number(e.target.value); out.textContent = fmt ? fmt(obj[key]) : obj[key]; okChanged(); } }),
+      out));
+}
+
+const THEME_FIELD_LABELS = {
+  key_fill: "Key fill", key_outline: "Key border", key_text: "Key text",
+  selected_fill: "Selected fill", selected_outline: "Selected border", selected_text: "Selected text",
+  flash_fill: "Type flash", label_text: "Wheel name", hint_text: "Hint text",
+};
+
+// ---- colour helpers (mirror the Pillow renderer) ----
+function hexToRgb(h) { h = (h || "#000").replace("#", ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) || 0); }
+function rgbToHex(r) { return "#" + r.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join(""); }
+function lighten(hex, f) { return rgbToHex(hexToRgb(hex).map((v) => v + (255 - v) * f)); }
+function darken(hex, f) { return rgbToHex(hexToRgb(hex).map((v) => v * (1 - f))); }
+
+// Build the SVG donut preview for a wheel; segments are clickable to select a key.
+function okDonut(wheel, selIdx, onPick) {
+  const t = S.overlay.theme;
+  const NS = "http://www.w3.org/2000/svg";
+  const cx = 130, cy = 130, rOut = 120, rIn = 66, rMid = (rOut + rIn) / 2, gap = 3;
+  const n = wheel.keys.length;
+  const pt = (deg, r) => [cx + r * Math.cos(deg * Math.PI / 180), cy + r * Math.sin(deg * Math.PI / 180)];
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 260 260");
+  svg.setAttribute("class", "ok-donut");
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+
+  const defs = mk("defs", {});
+  const grad = (id, c) => {
+    const g = mk("linearGradient", { id, x1: 0, y1: 0, x2: 0, y2: 1 });
+    g.append(mk("stop", { offset: 0, "stop-color": lighten(c, 0.22) }));
+    g.append(mk("stop", { offset: 1, "stop-color": darken(c, 0.16) }));
+    return g;
+  };
+  defs.append(grad("okgKey", t.key_fill), grad("okgSel", t.selected_fill));
+  const glow = mk("filter", { id: "okGlow", x: "-40%", y: "-40%", width: "180%", height: "180%" });
+  glow.append(mk("feDropShadow", { dx: 0, dy: 0, stdDeviation: 4, "flood-color": t.selected_fill, "flood-opacity": 0.9 }));
+  defs.append(glow);
+  svg.append(defs);
+
+  wheel.keys.forEach((k, i) => {
+    const c = -90 + i * 360 / n, half = 180 / n;
+    const a0 = c - half + gap, a1 = c + half - gap;
+    const [ox0, oy0] = pt(a0, rOut), [ox1, oy1] = pt(a1, rOut);
+    const [ix1, iy1] = pt(a1, rIn), [ix0, iy0] = pt(a0, rIn);
+    const sel = i === selIdx;
+    const path = mk("path", {
+      d: `M ${ox0} ${oy0} A ${rOut} ${rOut} 0 0 1 ${ox1} ${oy1} L ${ix1} ${iy1} A ${rIn} ${rIn} 0 0 0 ${ix0} ${iy0} Z`,
+      fill: sel ? "url(#okgSel)" : "url(#okgKey)",
+      stroke: sel ? t.selected_outline : t.key_outline, "stroke-width": 2,
+      "stroke-linejoin": "round", class: "ok-seg", "data-i": i,
+    });
+    if (sel) path.setAttribute("filter", "url(#okGlow)");
+    path.addEventListener("click", () => onPick(i));
+    svg.append(path);
+    const [lx, ly] = pt(c, rMid);
+    const label = mk("text", { x: lx, y: ly, fill: sel ? t.selected_text : t.key_text,
+      "text-anchor": "middle", "dominant-baseline": "central",
+      "font-size": (k.label.length <= 2 ? 16 : 10.5), "font-weight": "700" }, k.label);
+    label.addEventListener("click", () => onPick(i));
+    svg.append(label);
+  });
+  svg.append(mk("text", { x: cx, y: cy, fill: t.label_text, "text-anchor": "middle",
+    "dominant-baseline": "central", "font-size": 17, "font-weight": "700" }, wheel.name));
+  return svg;
+}
+
+// Re-tint the live preview without a full re-render (used while dragging colours).
+function liveDonut() {
+  const host = $("#okPreview");
+  if (!host) return;
+  host.replaceChildren(okDonut(S.overlay.wheels[S.okWheel], S.okKey, pickKey));
+}
+function pickKey(i) { S.okKey = i; renderKeyboard_refresh(); }
+
+function renderKeyboard() {
+  const O = S.overlay;
+  S.okWheel = Math.min(S.okWheel, O.wheels.length - 1);
+  const wheel = O.wheels[S.okWheel];
+  S.okKey = Math.min(S.okKey, wheel.keys.length - 1);
+
+  // --- wheel tabs ---
+  const wheelTabs = h("div", { class: "ok-tabs" },
+    O.wheels.map((w, i) => h("button", {
+      class: "ok-tab" + (i === S.okWheel ? " active" : ""),
+      onclick: () => { S.okWheel = i; S.okKey = 0; renderKeyboard_refresh(); },
+    }, w.name || "·")),
+    h("button", { class: "ok-tab add", title: "Add a wheel", onclick: () => {
+      O.wheels.push({ name: "new", keys: [{ label: "A", key: "a" }] });
+      S.okWheel = O.wheels.length - 1; S.okKey = 0; okChanged(true);
+    } }, "+"));
+
+  // --- key rows for the selected wheel ---
+  const keyRows = wheel.keys.map((k, i) => h("div", {
+    class: "ok-keyrow" + (i === S.okKey ? " sel" : ""), onclick: () => { S.okKey = i; liveDonut(); highlightKeyRows(); },
+  },
+    h("input", { type: "text", class: "ok-lbl", value: k.label, placeholder: "label",
+      oninput: (e) => { k.label = e.target.value; okChanged(); liveDonut(); } }),
+    h("input", { type: "text", class: "ok-key", list: "keyNames", value: k.key, placeholder: "key e.g. a, space, enter",
+      oninput: (e) => { k.key = e.target.value; okChanged(); } }),
+    h("button", { class: "btn small icon", title: "Move up", disabled: i === 0,
+      onclick: (e) => { e.stopPropagation(); [wheel.keys[i - 1], wheel.keys[i]] = [wheel.keys[i], wheel.keys[i - 1]]; S.okKey = i - 1; okChanged(true); } }, "↑"),
+    h("button", { class: "btn small icon", title: "Move down", disabled: i === wheel.keys.length - 1,
+      onclick: (e) => { e.stopPropagation(); [wheel.keys[i + 1], wheel.keys[i]] = [wheel.keys[i], wheel.keys[i + 1]]; S.okKey = i + 1; okChanged(true); } }, "↓"),
+    h("button", { class: "btn small icon danger", title: "Remove key", disabled: wheel.keys.length <= 1,
+      onclick: (e) => { e.stopPropagation(); wheel.keys.splice(i, 1); S.okKey = Math.max(0, i - 1); okChanged(true); } }, "✕")));
+
+  // --- appearance ---
+  const colorGrid = h("div", { class: "ok-colors" },
+    S.meta.theme_keys.filter((k) => k !== "font").map((k) => okColor(THEME_FIELD_LABELS[k] || k, O.theme, k)));
+
+  view().append(
+    S.meta.overlay_supported ? null : h("div", { class: "banner" },
+      "The on-screen keyboard runs on Windows only. You can still edit it here; settings are saved for when you run gppcc on Windows."),
+
+    h("div", { class: "card" },
+      h("div", { class: "row", style: "margin-bottom:6px" }, h("h2", {}, "On-screen keyboard"), h("div", { class: "spacer" }),
+        h("span", { class: "hint", style: "margin:0" }, "Bind a button to the “On-screen keyboard” operation to open it.")),
+      h("p", { class: "hint" },
+        "Aim with the left stick, switch wheels with the right stick, ", h("b", {}, "A"), " types, ",
+        h("b", {}, "B"), " / ", h("b", {}, "Start"), " close. Changes apply live while it is open.")),
+
+    h("div", { class: "card" },
+      h("h3", {}, "Wheels"),
+      wheelTabs,
+      h("div", { class: "grid two ok-editor" },
+        h("div", {},
+          h("div", { id: "okPreview", class: "ok-preview" }, okDonut(wheel, S.okKey, pickKey)),
+          h("div", { class: "field" }, h("span", {}, "Wheel name"),
+            h("input", { type: "text", value: wheel.name, maxlength: 16,
+              oninput: (e) => { wheel.name = e.target.value; okChanged(); liveDonut(); renderWheelTabLabel(); } })),
+          h("div", { class: "row" },
+            h("button", { class: "btn small", title: "Move wheel left", disabled: S.okWheel === 0,
+              onclick: () => { [O.wheels[S.okWheel - 1], O.wheels[S.okWheel]] = [O.wheels[S.okWheel], O.wheels[S.okWheel - 1]]; S.okWheel--; okChanged(true); } }, "◀ Move"),
+            h("button", { class: "btn small", title: "Move wheel right", disabled: S.okWheel === O.wheels.length - 1,
+              onclick: () => { [O.wheels[S.okWheel + 1], O.wheels[S.okWheel]] = [O.wheels[S.okWheel], O.wheels[S.okWheel + 1]]; S.okWheel++; okChanged(true); } }, "Move ▶"),
+            h("div", { class: "spacer" }),
+            h("button", { class: "btn small danger", title: "Delete this wheel", disabled: O.wheels.length <= 1,
+              onclick: () => { O.wheels.splice(S.okWheel, 1); S.okWheel = Math.max(0, S.okWheel - 1); S.okKey = 0; okChanged(true); } }, "Delete wheel"))),
+        h("div", {},
+          h("div", { class: "row", style: "margin-bottom:6px" }, h("b", {}, "Keys"), h("div", { class: "spacer" }),
+            h("button", { class: "btn small primary", onclick: () => {
+              wheel.keys.push({ label: "", key: "" }); S.okKey = wheel.keys.length - 1; okChanged(true);
+            } }, "+ Add key")),
+          h("div", { class: "ok-keys" }, keyRows),
+          h("p", { class: "hint" }, "Label is what shows on the wheel. Key is what gets typed — a character like ",
+            h("code", {}, "a"), " or a name like ", h("code", {}, "space"), ", ", h("code", {}, "enter"), ", ",
+            h("code", {}, "shift+a"), "."))) ),
+
+    h("div", { class: "grid two" },
+      h("div", { class: "card" },
+        h("h3", {}, "Appearance"),
+        colorGrid,
+        h("div", { class: "field" }, h("span", {}, "Font"),
+          h("input", { type: "text", value: O.theme.font, placeholder: "Segoe UI",
+            oninput: (e) => { O.theme.font = e.target.value; okChanged(); } })),
+        okRange("Width", O.size, "width_frac", 0.15, 1, 0.01, (v) => Math.round(v * 100) + "% of screen"),
+        okRange("Height", O.size, "height_frac", 0.15, 1, 0.01, (v) => Math.round(v * 100) + "% of screen")),
+      h("div", { class: "card" },
+        h("h3", {}, "Shift / Caps"),
+        h("div", { class: "field" }, h("span", {}, "Shift button"),
+          h("div", { class: "row" },
+            select(S.meta.inputs.map((i) => [i, inputLabel(i)]), O.shift.input, (v) => { O.shift.input = v; okChanged(); }),
+            h("button", { class: "btn icon small", title: "Press a gamepad button to capture",
+              onclick: (e) => startCapture(e.currentTarget, (name) => { O.shift.input = name; okChanged(true); }) }, "🎮"))),
+        h("div", { class: "field" }, h("span", {}, "Behaviour"),
+          select(S.meta.shift_modes.map((m) => [m, { toggle: "Toggle (Caps Lock)", hold: "Hold to shift" }[m] || m]),
+            O.shift.mode, (v) => { O.shift.mode = v; okChanged(); })),
+        h("p", { class: "hint" }, "While the overlay is open, this button shifts the next key(s): letters go uppercase and symbols use their shifted form.")),
+      h("div", { class: "card" },
+        h("h3", {}, "Sound"),
+        h("label", { class: "field inline", style: "margin-bottom:12px" },
+          h("input", { type: "checkbox", checked: O.sound.enabled, onchange: (e) => { O.sound.enabled = e.target.checked; okChanged(); } }),
+          h("span", {}, "Sound effects")),
+        h("div", { class: "field" }, h("span", {}, "Style"),
+          select(S.meta.sound_styles.map((s) => [s, { off: "Silent", tick: "Tick (short blip)", beep: "System beep" }[s] || s]),
+            O.sound.style, (v) => { O.sound.style = v; okChanged(); })),
+        h("p", { class: "hint" }, "Plays a short sound when you type a key or switch wheels (Windows only)."),
+        h("div", { style: "height:10px" }),
+        h("button", { class: "btn", onclick: () => {
+          S.overlay = clone(S.meta.overlay_defaults); S.okWheel = 0; S.okKey = 0; okChanged(true);
+          toast("Keyboard reset to defaults");
+        } }, "Reset keyboard to defaults"))));
+}
+
+function renderWheelTabLabel() {
+  const tabs = document.querySelectorAll(".ok-tab");
+  if (tabs[S.okWheel]) tabs[S.okWheel].textContent = S.overlay.wheels[S.okWheel].name || "·";
+}
+function highlightKeyRows() {
+  document.querySelectorAll(".ok-keyrow").forEach((r, i) => r.classList.toggle("sel", i === S.okKey));
+}
+
 // ---------------------------------------------------------------- boot
 async function boot() {
   document.querySelectorAll("#tabs button").forEach((b) =>
     b.addEventListener("click", () => { location.hash = b.dataset.tab; }));
   const fromHash = () => {
     const t = location.hash.slice(1);
-    S.tab = ["live", "controller", "cursor", "bindings", "macros", "profiles"].includes(t) ? t : "live";
+    S.tab = ["live", "controller", "cursor", "bindings", "macros", "keyboard", "profiles"].includes(t) ? t : "live";
     if (S.capture?.cancel) S.capture.cancel(); else S.capture = null;
     render();
   };
@@ -845,11 +1085,12 @@ async function boot() {
   $("#enabledToggle").addEventListener("change", (e) =>
     api("POST", "enabled", { enabled: e.target.checked }).catch((err) => toast(err.message, true)));
   $("#permButton").addEventListener("click", () => api("POST", "permissions", {}));
-  window.addEventListener("beforeunload", () => { if (saveTimer) saveNow(); });
+  window.addEventListener("beforeunload", () => { if (saveTimer) saveNow(); if (okSaveTimer) saveOverlay(); });
 
   try {
     S.meta = await api("GET", "meta");
     S.remaps = (await api("GET", "remap")).remaps;
+    S.overlay = await api("GET", "overlay");
     await loadProfiles();
   } catch (e) {
     view().append(h("div", { class: "card" }, "Could not reach gppcc: " + e.message));

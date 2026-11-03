@@ -90,6 +90,7 @@ windows running as Administrator. To control those, run gppcc as Administrator t
 | **Cursor & Scroll** | Pick the sticks and set speed, response curve, deadzone, precision multiplier, invert, and the repeat timings |
 | **Bindings** | Map gamepad inputs to operations. Click 🎮 and press a button to capture it |
 | **Macros** | Build step sequences and test them with a 3 s delay |
+| **Keyboard** | Design the on-screen keyboard overlay: wheels, keys, colours, size, and sound |
 | **Profiles** | Create, duplicate, rename, delete, import, and export profiles |
 
 Every change saves automatically and takes effect immediately. Use the switch in the header (or
@@ -108,6 +109,7 @@ Every change saves automatically and takes effect immediately. Use the switch in
 | Precision | slows the cursor (hold, or toggle it with press/toggle) |
 | Pause / resume | turns gamepad control on or off. This binding keeps working while paused |
 | Switch to profile / Next profile | changes the active profile |
+| On-screen keyboard | opens the radial keyboard overlay (Windows only, see below) |
 
 `mod` is **Cmd on macOS and Ctrl on Windows**, so one profile works on both systems.
 `win`, `super`, `meta`, and `command` all mean the Cmd/Windows key, and `option` means `alt`.
@@ -150,11 +152,54 @@ keys and buttons it left down are released automatically.
 | L-stick click | macro "Select all + copy" |
 | R-stick click | paste |
 | LB + Y | macro "Auto clicker" (toggle) |
+| Back + Y | on-screen keyboard overlay |
+
+### On-screen keyboard (Windows)
+
+The **On-screen keyboard** operation opens a small radial overlay (centred, with a fully
+transparent, click-through background — only the wheels are drawn) so you can type without a
+keyboard. Keys are anti-aliased, gradient-shaded segments of a donut, and the wheels are laid out
+as a Cupertino-style picker: the current wheel is centred and the neighbours shrink and fade away
+on each side. While it is open, the cursor and your other bindings are suspended and the gamepad
+drives the overlay:
+
+- **Left stick** — aim at a key in the current wheel.
+- **Right stick** — flick left/right to slide to the next/previous wheel (it loops around). The
+  dots under the wheels are a minimap showing which wheel you are on.
+- **A** — type the aimed key. The overlay stays open, so you can keep typing.
+- **X** — Shift/Caps: the keys on the wheel switch case so you can see it is on. Uppercases
+  letters and shifts symbols. It can be a **toggle** (Caps Lock) or **hold**, and the button is
+  configurable.
+- **B** or **Start** (or pressing the button that opened it again) — close the overlay.
+
+The default wheels cover the alphabet (split across two wheels, `a–m` and `n–z`), numbers,
+symbols, punctuation, and special keys (Space, Enter, Backspace, arrows, …).
+
+> On some controllers (Nintendo-style layouts in particular) SDL names the face buttons by
+> position, so the button physically labelled "B" may not be gppcc's `B`. **Start** always closes
+> the overlay regardless of layout, and you can remap buttons on the **Controller** screen.
+
+#### Customising it (Keyboard tab)
+
+The **Keyboard** tab is a visual editor for the overlay (settings are global, shared by every
+profile, and apply live while the overlay is open):
+
+- **Wheels** — add, delete, rename and reorder wheels. Pick a wheel from the tabs, then edit its
+  keys in the list or click a segment in the donut preview. Each key has a **label** (what shows)
+  and a **key** (what gets typed — a character like `a`, or a name like `space`, `enter`, `shift+a`).
+- **Appearance** — colours for keys, selection, text and flashes; the font; and the overlay's
+  width and height as a fraction of the screen.
+- **Shift / Caps** — pick the shift button and whether it toggles (Caps Lock) or is held.
+- **Sound** — a short tick or system beep when you type a key or switch wheels (Windows only).
+
+The overlay never takes keyboard focus, so the characters you type go to whatever app was already
+in front. It is Windows-only for now; on other platforms the binding logs that it is unsupported.
 
 ## Files
 
 Profiles are saved as JSON in `~/.gppcc/profiles/` (`%USERPROFILE%\.gppcc\profiles` on Windows).
-Set `GPPCC_HOME` to use a different folder.
+The on-screen keyboard's wheels, theme and sound live in `~/.gppcc/overlay.json` (global, not
+per-profile). Set `GPPCC_HOME` to use a different folder.
 
 ```
 gppcc/
@@ -162,6 +207,8 @@ gppcc/
   engine.py     main loop: gamepad → cursor/scroll/bindings
   gamepad.py    SDL2 controller input (pygame-ce)
   output.py     mouse/keyboard injection (pynput + native smooth scroll)
+  overlay.py    on-screen keyboard overlay window (Windows, layered + per-pixel alpha)
+  overlay_render.py  Pillow renderer for the overlay (anti-aliased donut wheels)
   macros.py     macro playback threads
   config.py     profile schema, validation, storage
   server.py     local web UI + JSON API (127.0.0.1 only)

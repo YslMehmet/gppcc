@@ -175,6 +175,160 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(config.load_remaps(), {})
 
 
+class FakeOverlay:
+    def __init__(self):
+        self.on_type = lambda combo: None
+        self._open = False
+        self.aims = []
+        self.commits = 0
+        self.closed = 0
+
+    def open(self):
+        self._open = True
+
+    def close(self):
+        if self._open:
+            self.closed += 1
+        self._open = False
+
+    def is_open(self):
+        return self._open
+
+    def aim(self, lx, ly, rx, ry):
+        self.aims.append((lx, ly, rx, ry))
+
+    def commit(self):
+        self.commits += 1
+        self.on_type("x")  # pretend the aimed key was "x"
+
+    def set_shift(self, on):
+        self.shift = on
+
+    def shutdown(self):
+        pass
+
+
+class OverlayTest(unittest.TestCase):
+    def setUp(self):
+        engine_mod.Gamepads = FakePads
+        engine_mod.Output = RecOut
+        config.ensure_home()
+        self.e = engine_mod.Engine("default")
+        self.out = self.e.out
+        self.ov = FakeOverlay()
+        self.ov.shift = False
+        # Short-circuit lazy creation so no real Tk window is spawned.
+        from gppcc import overlay as overlay_mod
+        self._orig_create = overlay_mod.create
+        overlay_mod.create = lambda cfg=None: self.ov
+
+    def tearDown(self):
+        from gppcc import overlay as overlay_mod
+        overlay_mod.create = self._orig_create
+
+    def tick(self, st, dt=0.01):
+        self.e._tick(st, dt)
+
+    def test_open_captures_pad_then_close(self):
+        # Back + Y opens the overlay (default binding).
+        self.tick(pad("Back"))
+        self.tick(pad("Back", "Y"))
+        self.assertTrue(self.ov.is_open())
+
+        # While open the cursor must not move, even at full stick deflection.
+        self.out.moved = [0.0, 0.0]
+        self.tick(pad("Back", "Y", lx=1.0, ry=-1.0), dt=0.1)
+        self.assertEqual(self.out.moved, [0.0, 0.0])
+        self.assertEqual(self.out.scrolled, [0.0, 0.0])
+        self.assertEqual(self.ov.aims[-1], (1.0, 0.0, 0.0, -1.0))
+
+        # A types the aimed key (overlay stays open).
+        self.tick(pad("A"))
+        self.assertEqual(self.ov.commits, 1)
+        self.assertIn(("tap", "x"), self.out.ev)
+        self.assertTrue(self.ov.is_open())
+
+        # B closes it; cursor control resumes afterwards.
+        self.tick(pad("B"))
+        self.assertFalse(self.ov.is_open())
+        self.assertGreaterEqual(self.ov.closed, 1)
+        self.out.moved = [0.0, 0.0]
+        self.tick(pad()); self.tick(pad(lx=1.0), dt=0.1)
+        self.assertGreater(self.out.moved[0], 0.0)
+
+    def test_start_also_closes_overlay(self):
+        # Start is a universal "close" so a mislabelled face button can't trap you.
+        self.tick(pad("Back")); self.tick(pad("Back", "Y"))
+        self.assertTrue(self.ov.is_open())
+        self.tick(pad()); self.tick(pad("Start"))
+        self.assertFalse(self.ov.is_open())
+
+    def test_pause_closes_overlay(self):
+        self.tick(pad("Back")); self.tick(pad("Back", "Y"))
+        self.assertTrue(self.ov.is_open())
+        self.e.set_enabled(False)
+        self.assertFalse(self.ov.is_open())
+
+    def test_shift_toggle(self):
+        # Default shift is X in toggle mode.
+        self.tick(pad("Back")); self.tick(pad("Back", "Y"))
+        self.assertFalse(self.ov.shift)
+        self.tick(pad()); self.tick(pad("X"))
+        self.assertTrue(self.ov.shift)
+        self.tick(pad()); self.tick(pad("X"))
+        self.assertFalse(self.ov.shift)
+
+    def test_shift_hold(self):
+        self.tick(pad("Back")); self.tick(pad("Back", "Y"))  # opens (loads default cfg)
+        self.e._overlay_cfg = config.normalize_overlay({"shift": {"input": "X", "mode": "hold"}})
+        self.tick(pad("X"))
+        self.assertTrue(self.ov.shift)
+        self.tick(pad())            # release X -> shift off
+        self.assertFalse(self.ov.shift)
+
+
+class OverlayConfigTest(unittest.TestCase):
+    def test_defaults_split_alphabet(self):
+        o = config.load_overlay()
+        names = [w["name"] for w in o["wheels"]]
+        self.assertIn("a–m", names)
+        self.assertIn("n–z", names)
+        am = o["wheels"][names.index("a–m")]["keys"]
+        self.assertEqual([k["key"] for k in am], list("abcdefghijklm"))
+
+    def test_normalize_rejects_junk_and_clamps(self):
+        o = config.normalize_overlay({
+            "theme": {"key_fill": "not-a-color", "font": "  Comic Sans  "},
+            "size": {"width_frac": 5, "height_frac": -1},
+            "sound": {"enabled": "yes", "style": "explode"},
+            "wheels": [
+                {"name": "x" * 50, "keys": [{"label": "LONGLABELHERE!!", "key": "a"}, {"key": ""}]},
+                {"name": "empty", "keys": []},          # dropped: no valid keys
+                "garbage",
+            ],
+        })
+        self.assertEqual(o["theme"]["key_fill"], config.DEFAULT_OVERLAY["theme"]["key_fill"])
+        self.assertEqual(o["theme"]["font"], "Comic Sans")
+        self.assertEqual(o["size"]["width_frac"], 1.0)      # clamped
+        self.assertEqual(o["size"]["height_frac"], 0.15)    # clamped
+        self.assertEqual(o["sound"]["style"], config.DEFAULT_OVERLAY["sound"]["style"])
+        self.assertEqual(len(o["wheels"]), 1)               # only the first wheel had a valid key
+        self.assertLessEqual(len(o["wheels"][0]["name"]), 16)
+        self.assertEqual(len(o["wheels"][0]["keys"]), 1)    # empty-key entry dropped
+
+    def test_empty_falls_back_to_defaults(self):
+        o = config.normalize_overlay({"wheels": []})
+        self.assertEqual(len(o["wheels"]), len(config.DEFAULT_OVERLAY["wheels"]))
+
+    def test_round_trip(self):
+        o = config.load_overlay()
+        o["wheels"][0]["name"] = "Letters"
+        o["sound"]["style"] = "beep"
+        config.save_overlay(o)
+        self.assertEqual(config.load_overlay()["wheels"][0]["name"], "Letters")
+        self.assertEqual(config.load_overlay()["sound"]["style"], "beep")
+
+
 class ComboParseTest(unittest.TestCase):
     def test_parse(self):
         from pynput.keyboard import Key, KeyCode

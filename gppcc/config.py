@@ -38,7 +38,7 @@ TRIGGERS = ["press", "release", "hold", "repeat", "toggle"]
 
 ACTION_TYPES = [
     "none", "key", "mouse", "scroll", "move", "text", "macro",
-    "precision", "toggle_enabled", "profile", "next_profile",
+    "precision", "toggle_enabled", "profile", "next_profile", "keyboard",
 ]
 
 MOUSE_BUTTONS = ["left", "right", "middle"]
@@ -90,6 +90,7 @@ DEFAULT_PROFILE = {
         {"input": "LS", "trigger": "press", "action": {"type": "macro", "name": "Select all + copy"}},
         {"input": "RS", "trigger": "press", "action": {"type": "key", "keys": "mod+v"}},
         {"input": "Y", "with": "LB", "trigger": "toggle", "action": {"type": "macro", "name": "Auto clicker"}},
+        {"input": "Y", "with": "Back", "trigger": "press", "action": {"type": "keyboard"}},
     ],
     "macros": {
         "Select all + copy": {
@@ -352,3 +353,125 @@ def save_remap(device: str, mapping) -> dict:
         json.dump(remaps, f, indent=2)
     os.replace(tmp, DEVICES_FILE)
     return mapping
+
+
+# ---------------------------------------------------------------------------
+# On-screen keyboard overlay (shared by all profiles): wheels, theme, sound.
+# ---------------------------------------------------------------------------
+
+OVERLAY_FILE = HOME / "overlay.json"
+SOUND_STYLES = ["off", "tick", "beep"]
+SHIFT_MODES = ["toggle", "hold"]
+
+_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _wheel(name, keys):
+    return {"name": name, "keys": [{"label": l, "key": k} for l, k in keys]}
+
+
+DEFAULT_OVERLAY = {
+    "theme": {
+        "key_fill": "#1b2433",
+        "key_outline": "#394353",
+        "key_text": "#e5e9f0",
+        "selected_fill": "#2563eb",
+        "selected_outline": "#93c5fd",
+        "selected_text": "#ffffff",
+        "flash_fill": "#22c55e",
+        "label_text": "#8893a5",
+        "hint_text": "#aab3c2",
+        "font": "Segoe UI",
+    },
+    "size": {"width_frac": 0.6, "height_frac": 0.46},
+    "sound": {"enabled": True, "style": "tick"},
+    "shift": {"input": "X", "mode": "toggle"},
+    "wheels": [
+        _wheel("a–m", [(c, c) for c in "abcdefghijklm"]),
+        _wheel("n–z", [(c, c) for c in "nopqrstuvwxyz"]),
+        _wheel("0–9", [(d, d) for d in "1234567890"]),
+        _wheel("sym", [(c, c) for c in ".,!?@#$%&*"]),
+        _wheel("pun", [(c, c) for c in "-_=+/\\:;'\""]),
+        _wheel("key", [
+            ("Space", "space"), ("Enter", "enter"), ("Bksp", "backspace"),
+            ("Tab", "tab"), ("Esc", "esc"), ("Del", "delete"),
+            ("↑", "up"), ("↓", "down"), ("←", "left"), ("→", "right"),
+        ]),
+    ],
+}
+
+THEME_KEYS = list(DEFAULT_OVERLAY["theme"])
+
+
+def _color(v, default):
+    v = str(v or "")
+    return v if _HEX_RE.match(v) else default
+
+
+def _norm_key(k) -> dict | None:
+    if not isinstance(k, dict):
+        return None
+    label = str(k.get("label", "")).strip()[:12]
+    key = str(k.get("key", "")).strip()[:32]
+    if not key:
+        return None
+    return {"label": label or key, "key": key}
+
+
+def _norm_wheel(w) -> dict | None:
+    if not isinstance(w, dict):
+        return None
+    keys = [k for k in map(_norm_key, w.get("keys") or []) if k][:16]
+    if not keys:
+        return None
+    name = str(w.get("name", "")).strip()[:16] or "wheel"
+    return {"name": name, "keys": keys}
+
+
+def normalize_overlay(o) -> dict:
+    o = o if isinstance(o, dict) else {}
+    d = DEFAULT_OVERLAY
+    theme_in = o.get("theme") if isinstance(o.get("theme"), dict) else {}
+    theme = {k: _color(theme_in.get(k), d["theme"][k]) for k in THEME_KEYS if k != "font"}
+    theme["font"] = str(theme_in.get("font") or d["theme"]["font"]).strip()[:40] or d["theme"]["font"]
+
+    size_in = o.get("size") if isinstance(o.get("size"), dict) else {}
+    size = {
+        "width_frac": _num(size_in.get("width_frac"), d["size"]["width_frac"], 0.15, 1.0),
+        "height_frac": _num(size_in.get("height_frac"), d["size"]["height_frac"], 0.15, 1.0),
+    }
+
+    sound_in = o.get("sound") if isinstance(o.get("sound"), dict) else {}
+    sound = {
+        "enabled": bool(sound_in.get("enabled", d["sound"]["enabled"])),
+        "style": _choice(sound_in.get("style"), SOUND_STYLES, d["sound"]["style"]),
+    }
+
+    shift_in = o.get("shift") if isinstance(o.get("shift"), dict) else {}
+    shift = {
+        "input": _choice(shift_in.get("input"), INPUTS, d["shift"]["input"]),
+        "mode": _choice(shift_in.get("mode"), SHIFT_MODES, d["shift"]["mode"]),
+    }
+
+    wheels = [w for w in map(_norm_wheel, o.get("wheels") or []) if w][:12]
+    if not wheels:
+        wheels = copy.deepcopy(d["wheels"])
+    return {"theme": theme, "size": size, "sound": sound, "shift": shift, "wheels": wheels}
+
+
+def load_overlay() -> dict:
+    try:
+        with open(OVERLAY_FILE, encoding="utf-8") as f:
+            return normalize_overlay(json.load(f))
+    except (OSError, ValueError):
+        return normalize_overlay(copy.deepcopy(DEFAULT_OVERLAY))
+
+
+def save_overlay(overlay) -> dict:
+    overlay = normalize_overlay(overlay)
+    OVERLAY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = OVERLAY_FILE.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(overlay, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, OVERLAY_FILE)
+    return overlay

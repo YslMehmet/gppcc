@@ -29,10 +29,16 @@ elif IS_WIN:
         "pynput._util.win32",
     ]
 
-# Mac-only modules are useless (and unimportable) on Windows.
-excludes = ["tkinter", "unittest", "pydoc", "numpy"]
-if not IS_MAC:
+excludes = ["unittest", "pydoc", "numpy"]
+if IS_MAC:
+    # The keyboard overlay (tkinter + Pillow) is Windows-only; Mac doesn't need it.
+    excludes += ["tkinter", "PIL"]
+else:
+    # Mac-only modules are useless (and unimportable) off macOS.
     excludes += ["gppcc.macmenu", "gppcc.machid"]
+if IS_WIN:
+    hiddenimports += ["gppcc.overlay", "gppcc.overlay_render", "PIL.Image",
+                      "PIL.ImageDraw", "PIL.ImageFont", "PIL.ImageFilter", "PIL.ImageChops"]
 
 a = Analysis(
     [os.path.join(ROOT, "run.py")],

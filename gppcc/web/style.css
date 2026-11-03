@@ -256,3 +256,42 @@ code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-si
 .remap-chip.on { background: var(--accent-2); border-color: var(--accent); }
 .remap-chip.on .remap-src { color: white; }
 .remap-chip.capturing { border-color: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 35%, transparent); animation: pulse 1s infinite; }
+
+/* ---- Keyboard overlay editor ---- */
+.ok-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.ok-tab {
+  font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+  padding: 5px 12px; border-radius: 999px;
+  background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+}
+.ok-tab:hover { border-color: var(--accent); }
+.ok-tab.active { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
+.ok-tab.add { color: var(--accent); font-weight: 700; }
+.ok-editor { align-items: start; }
+.ok-preview {
+  background:
+    linear-gradient(45deg, #1a1d25 25%, transparent 25%, transparent 75%, #1a1d25 75%) 0 0 / 20px 20px,
+    linear-gradient(45deg, #1a1d25 25%, #14171d 25%, #14171d 75%, #1a1d25 75%) 10px 10px / 20px 20px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; margin-bottom: 12px; display: flex; justify-content: center;
+}
+.ok-donut { width: 100%; max-width: 320px; height: auto; display: block; }
+.ok-seg { cursor: pointer; transition: opacity .08s; }
+.ok-seg:hover { opacity: .82; }
+.ok-donut text { cursor: pointer; pointer-events: auto; user-select: none; }
+.ok-keys { display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.ok-keyrow {
+  display: flex; align-items: center; gap: 6px; padding: 5px;
+  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+.ok-keyrow:hover { background: var(--panel-2); }
+.ok-keyrow.sel { background: var(--panel-2); border-color: var(--accent); }
+.ok-keyrow .ok-lbl { width: 86px; }
+.ok-keyrow .ok-key { flex: 1; min-width: 0; }
+.ok-colors { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.ok-color { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.ok-color input[type=color] {
+  width: 30px; height: 26px; padding: 0; border: 1px solid var(--border);
+  border-radius: 6px; background: none; cursor: pointer; flex: none;
+}
+.ok-rangeval { min-width: 104px; text-align: right; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
